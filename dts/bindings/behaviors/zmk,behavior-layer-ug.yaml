@@ -1,0 +1,24 @@
+# Copyright (c) 2026 The ZMK Contributors
+# SPDX-License-Identifier: MIT
+
+description: Three-state layer + solid underglow color toggle
+
+compatible: "zmk,behavior-layer-ug"
+
+include: behavior-metadata.yaml
+
+properties:
+  label:
+    type: string
+    required: false
+    deprecated: true
+  "#binding-cells":
+    type: int
+    required: true
+    const: 4
+
+binding-cells:
+  - param1  # LOWER layer id
+  - param2  # RAISE layer id
+  - param3  # HSB for LOWER: (h<<16)|(s<<8)|b
+  - param4  # HSB for RAISE: (h<<16)|(s<<8)|b

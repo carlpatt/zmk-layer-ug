@@ -1,0 +1,6 @@
+# Behavior that activates a momentary layer AND shows a solid underglow color
+# while held; restores the previous underglow on release.
+
+config ZMK_BEHAVIOR_LAYER_UG
+    bool "Layer + underglow solid color behavior"
+    depends on ZMK_RGB_UNDERGLOW
