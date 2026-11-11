@@ -13,6 +13,10 @@
  *   default + hold -> RAISE (solid color)
  *   LOWER/RAISE + any release -> default (restore color + effect)
  *
+ * Pressing RGB_EFF on a sub-layer chooses the effect the default layer
+ * resumes with (entry forces solid, so any other live effect is the
+ * user's choice).
+ *
  * Tap vs hold is decided on release using the press duration (200ms threshold).
  * On LOWER/RAISE a hold also returns to default: the spec only requires the
  * tap, but accepting any release means a slow tap can never strand the key
@@ -69,8 +73,14 @@ static void save_underglow(void) {
 
 static void restore_underglow(void) {
 	if (saved.valid) {
+		/* Entry forces SOLID, so a live effect that is not SOLID means
+		 * RGB_EFF was used on the sub-layer: that choice is the default
+		 * layer's effect. Otherwise restore the saved one.
+		 * shortcut: SOLID == 0 (first effect in rgb_underglow.c); cycling
+		 * back to SOLID deliberately falls back to the saved effect. */
+		uint8_t live = zmk_rgb_underglow_calc_effect(0);
 		zmk_rgb_underglow_set_hsb(saved.color);
-		zmk_rgb_underglow_select_effect(saved.effect);
+		zmk_rgb_underglow_select_effect(live == 0 ? saved.effect : live);
 		saved.valid = false;
 	}
 }
