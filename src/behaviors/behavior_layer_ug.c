@@ -5,16 +5,18 @@
  *
  * Three-state layer/underglow toggle on a single key.
  *
- * Binding (4 cells): <&layer_ug LOWER_ID RAISE_ID HSB_LOWER HSB_RAISE>
- *   HSB packed as (h<<16)|(s<<8)|b  (see RGB_COLOR_HSB_VAL in dt-bindings/zmk/rgb.h)
+ * Binding (2 cells): <&layer_ug LOWER_ID RAISE_ID>
+ * Colors are node properties: lower-hsb = <h s b>; raise-hsb = <h s b>;
  *
  * State machine (default = layer 0):
  *   default + tap  -> LOWER (solid color)
  *   default + hold -> RAISE (solid color)
- *   LOWER   + tap  -> default (restore normal underglow)
- *   RAISE   + tap  -> default (restore normal underglow)
+ *   LOWER   + tap  -> default (restore previous underglow color + effect)
+ *   RAISE   + tap  -> default (restore previous underglow color + effect)
  *
  * Tap vs hold is decided on release using the press duration (200ms threshold).
+ * The current layers are queried from the keymap (zmk_keymap_layer_active),
+ * so external layer switches do not leave this behavior in a stale state.
  */
 
 #define DT_DRV_COMPAT zmk_behavior_layer_ug
@@ -34,90 +36,87 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
 #define LUG_TAP_MS 200
 
-enum layer_ug_state { LUG_DEFAULT, LUG_LOWER, LUG_RAISE };
-
-struct behavior_layer_ug_data {
-    enum layer_ug_state state;
-    int64_t press_start;
-    struct zmk_led_hsb saved_color;
-    bool saved_valid;
+static const struct zmk_led_hsb lower_color = {
+	.h = DT_INST_PROP_BY_IDX(0, lower_hsb, 0),
+	.s = DT_INST_PROP_BY_IDX(0, lower_hsb, 1),
+	.b = DT_INST_PROP_BY_IDX(0, lower_hsb, 2),
 };
 
-static struct behavior_layer_ug_data data;
+static const struct zmk_led_hsb raise_color = {
+	.h = DT_INST_PROP_BY_IDX(0, raise_hsb, 0),
+	.s = DT_INST_PROP_BY_IDX(0, raise_hsb, 1),
+	.b = DT_INST_PROP_BY_IDX(0, raise_hsb, 2),
+};
 
-static void set_solid(uint32_t hsb) {
-    zmk_rgb_underglow_set_hsb((struct zmk_led_hsb){
-        .h = (hsb >> 16) & 0xFFFF,
-        .s = (hsb >> 8) & 0xFF,
-        .b = hsb & 0xFF,
-    });
+struct layer_ug_saved {
+	struct zmk_led_hsb color;
+	uint8_t effect;
+	bool valid;
+};
+
+static struct layer_ug_saved saved;
+static int64_t press_start;
+
+static void save_underglow(void) {
+	if (!saved.valid) {
+		saved.color = zmk_rgb_underglow_calc_hue(0);
+		saved.effect = zmk_rgb_underglow_calc_effect(0);
+		saved.valid = true;
+	}
 }
 
-static void save_current(struct behavior_layer_ug_data *d) {
-    if (!d->saved_valid) {
-        d->saved_color = zmk_rgb_underglow_calc_hue(0); /* direction 0 = unchanged */
-        d->saved_valid = true;
-    }
-}
-
-static void restore_current(struct behavior_layer_ug_data *d) {
-    if (d->saved_valid) {
-        zmk_rgb_underglow_set_hsb(d->saved_color);
-        d->saved_valid = false;
-    }
+static void restore_underglow(void) {
+	if (saved.valid) {
+		zmk_rgb_underglow_set_hsb(saved.color);
+		zmk_rgb_underglow_select_effect(saved.effect);
+		saved.valid = false;
+	}
 }
 
 static int layer_ug_binding_pressed(struct zmk_behavior_binding *binding,
-                                    struct zmk_behavior_binding_event event) {
-    data.press_start = k_uptime_get();
-    return ZMK_BEHAVIOR_OPAQUE;
+				    struct zmk_behavior_binding_event event) {
+	press_start = k_uptime_get();
+	return ZMK_BEHAVIOR_OPAQUE;
 }
 
 static int layer_ug_binding_released(struct zmk_behavior_binding *binding,
-                                     struct zmk_behavior_binding_event event) {
-    int lower_layer = binding->param1;
-    int raise_layer = binding->param2;
-    uint32_t hsb_lower = binding->param3;
-    uint32_t hsb_raise = binding->param4;
-    bool held = (k_uptime_get() - data.press_start) > LUG_TAP_MS;
+				     struct zmk_behavior_binding_event event) {
+	uint8_t lower_layer = binding->param1;
+	uint8_t raise_layer = binding->param2;
+	bool held = (k_uptime_get() - press_start) > LUG_TAP_MS;
+	bool on_lower = zmk_keymap_layer_active(lower_layer);
+	bool on_raise = zmk_keymap_layer_active(raise_layer);
 
-    switch (data.state) {
-    case LUG_DEFAULT:
-        if (held) {
-            save_current(&data);
-            zmk_keymap_layer_activate(raise_layer);
-            set_solid(hsb_raise);
-            data.state = LUG_RAISE;
-        } else {
-            save_current(&data);
-            zmk_keymap_layer_activate(lower_layer);
-            set_solid(hsb_lower);
-            data.state = LUG_LOWER;
-        }
-        break;
-    case LUG_LOWER:
-        zmk_keymap_layer_deactivate(lower_layer);
-        restore_current(&data);
-        data.state = LUG_DEFAULT;
-        break;
-    case LUG_RAISE:
-        zmk_keymap_layer_deactivate(raise_layer);
-        restore_current(&data);
-        data.state = LUG_DEFAULT;
-        break;
-    }
+	if (on_lower || on_raise) {
+		/* On LOWER or RAISE: a tap returns to the default layer */
+		if (!held) {
+			if (on_lower) {
+				zmk_keymap_layer_deactivate(lower_layer);
+			} else {
+				zmk_keymap_layer_deactivate(raise_layer);
+			}
+			restore_underglow();
+		}
+	} else {
+		/* On the default layer: tap -> LOWER, hold -> RAISE */
+		uint8_t target = held ? raise_layer : lower_layer;
+		save_underglow();
+		zmk_keymap_layer_activate(target);
+		zmk_rgb_underglow_set_hsb(target == lower_layer ? lower_color : raise_color);
+	}
 
-    return ZMK_BEHAVIOR_OPAQUE;
+	LOG_INF("layer_ug: held=%d on_lower=%d on_raise=%d", held, on_lower, on_raise);
+	return ZMK_BEHAVIOR_OPAQUE;
 }
 
 static const struct behavior_driver_api behavior_layer_ug_driver_api = {
-    .binding_pressed = layer_ug_binding_pressed,
-    .binding_released = layer_ug_binding_released,
-    .locality = BEHAVIOR_LOCALITY_GLOBAL,
+	.locality = BEHAVIOR_LOCALITY_GLOBAL,
+	.binding_pressed = layer_ug_binding_pressed,
+	.binding_released = layer_ug_binding_released,
 };
 
-BEHAVIOR_DT_INST_DEFINE(0, NULL, NULL, &data, NULL, POST_KERNEL,
-                        CONFIG_KERNEL_INIT_PRIORITY_DEFAULT,
-                        &behavior_layer_ug_driver_api);
+BEHAVIOR_DT_INST_DEFINE(0, NULL, NULL, NULL, NULL, POST_KERNEL,
+			CONFIG_KERNEL_INIT_PRIORITY_DEFAULT,
+			&behavior_layer_ug_driver_api);
 
 #endif /* DT_HAS_COMPAT_STATUS_OKAY(DT_DRV_COMPAT) */
