@@ -11,10 +11,12 @@
  * State machine (default = layer 0):
  *   default + tap  -> LOWER (solid color)
  *   default + hold -> RAISE (solid color)
- *   LOWER   + tap  -> default (restore previous underglow color + effect)
- *   RAISE   + tap  -> default (restore previous underglow color + effect)
+ *   LOWER/RAISE + any release -> default (restore color + effect)
  *
  * Tap vs hold is decided on release using the press duration (200ms threshold).
+ * On LOWER/RAISE a hold also returns to default: the spec only requires the
+ * tap, but accepting any release means a slow tap can never strand the key
+ * on a sub-layer.
  * The current layers are queried from the keymap (zmk_keymap_layer_active),
  * so external layer switches do not leave this behavior in a stale state.
  */
@@ -88,20 +90,18 @@ static int layer_ug_binding_released(struct zmk_behavior_binding *binding,
 	bool on_raise = zmk_keymap_layer_active(raise_layer);
 
 	if (on_lower || on_raise) {
-		/* On LOWER or RAISE: a tap returns to the default layer */
-		if (!held) {
-			if (on_lower) {
-				zmk_keymap_layer_deactivate(lower_layer);
-			} else {
-				zmk_keymap_layer_deactivate(raise_layer);
-			}
-			restore_underglow();
-		}
+		/* On LOWER or RAISE: any release returns to the default layer */
+		zmk_keymap_layer_deactivate(on_lower ? lower_layer : raise_layer);
+		restore_underglow();
 	} else {
 		/* On the default layer: tap -> LOWER, hold -> RAISE */
 		uint8_t target = held ? raise_layer : lower_layer;
 		save_underglow();
 		zmk_keymap_layer_activate(target);
+		/* shortcut: 0 = UNDERGLOW_EFFECT_SOLID in rgb_underglow.c (not in
+		 * the public header); stops any running animation so the solid
+		 * layer color isn't overwritten by the next tick */
+		zmk_rgb_underglow_select_effect(0);
 		zmk_rgb_underglow_set_hsb(target == lower_layer ? lower_color : raise_color);
 	}
 
