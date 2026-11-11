@@ -19,13 +19,9 @@ properties:
   lower-hsb:
     type: array
     required: true
-    minItems: 3
-    maxItems: 3
   raise-hsb:
     type: array
     required: true
-    minItems: 3
-    maxItems: 3
 
 binding-cells:
   - param1  # LOWER layer id
